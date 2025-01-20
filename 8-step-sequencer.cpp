@@ -7,7 +7,7 @@ using namespace daisysp;
 
 DaisyPod hw;
 
-enum EditMode
+enum Mode
 {
 	STEP_EDIT, // for selecting and editing steps
 	GATE_VIEW  // for watching the sequence play
@@ -18,16 +18,15 @@ bool active[8];
 float tempo = 120.0f;
 float phase = 0.0f; // accumulate each part of the step for a single sample
 float stepTime = 0.0f;
-uint8_t currenStep = 0;
+uint8_t currentStep = 0;
 bool gateOutput = false;
-EditMode currentMode = STEP_EDIT;
+Mode currentMode = STEP_EDIT;
 
 Color colors[8];
 
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)
 {
 	hw.ProcessAllControls();
-	tempo = hw.knob1.Process() * 300.0f + 40.0f; // range for the tempo
 
 	/**
 	 * when we say tempo is 120BPM each beat represent a quarter note
@@ -37,6 +36,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 	 * then 2/2 makes each beat take half a step
 	 * without the last division /2 each step would last a full beat i.e. a quarter note
 	 */
+	tempo = hw.knob1.Process() * 300.0f + 40.0f; // range for the tempo
 	float stepFrequency = tempo / 60.0f / 2.0f;
 
 	if (hw.encoder.RisingEdge()) // switch between edit and view mode
@@ -56,7 +56,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 		}
 		else
 		{
-			hw.led1.SetColor(colors[currenStep]); // show playing step
+			hw.led1.SetColor(colors[currentStep]); // show playing step
 			if (gateOutput)
 			{
 				hw.led2.SetGreen(1);
@@ -108,14 +108,14 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 		if (phase >= 1.0f)
 		{
 			phase -= 1.0f;
-			currenStep = (currenStep + 1) % 8;
-			gateOutput = active[currenStep];
+			currentStep = (currentStep + 1) % 8;
+			gateOutput = active[currentStep];
 
 			// only update LEDs if we are in GATE_VIEW mode
 			if (currentMode == GATE_VIEW)
 			{
 				hw.ClearLeds();
-				hw.led1.SetColor(colors[currenStep]);
+				hw.led1.SetColor(colors[currentStep]);
 				if (gateOutput)
 				{
 					hw.led2.SetGreen(1);
