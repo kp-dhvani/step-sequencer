@@ -6,6 +6,7 @@ using namespace patch_sm;
 using namespace daisysp;
 
 DaisyPatchSM patch;
+OnePole filter;
 
 constexpr float BASE_FREQUENCY = 440.0f;
 
