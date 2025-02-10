@@ -4,6 +4,8 @@ TARGET = patch.init_patch
 # Sources
 CPP_SOURCES = patch.init_patch.cpp
 
+LDFLAGS += -u _printf_float
+
 # Library Locations
 LIBDAISY_DIR = ../../../daisy-examples/libDaisy/
 DAISYSP_DIR = ../../../daisy-examples/DaisySP/
