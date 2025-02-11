@@ -7,6 +7,8 @@ using namespace daisysp;
 
 DaisyPod hw;
 
+constexpr bool DEBUG_ENABLED = true;
+
 constexpr uint8_t NUM_STEPS = 8;
 constexpr float MIN_TEMPO = 100;
 constexpr float MAX_TEMPO = 400;
@@ -20,20 +22,69 @@ enum Mode
 	GATE_VIEW
 };
 
+constexpr uint8_t NUM_INTERVALS = 7;
+
+/**
+ * use the knob2 to choose the pitch of the oscillator
+ * going counter clockwise will go below the root/octave (440Hz)
+ * going clockwise will go up the root/octave
+ */
+float sevenNoteScale[7] = {
+	1.0f,		 // Root
+	9.0f / 8.0f, // Major Second (1.125)
+	5.0f / 4.0f, // Major Third (1.25)
+	4.0f / 3.0f, // Perfect Fourth (1.333)
+	3.0f / 2.0f, // Perfect Fifth (1.5)
+	5.0f / 3.0f, // Major Sixth (1.666)
+	15.0f / 8.0f // Major Seventh (1.875)
+};
+
 struct
 {
 	uint8_t currentStep;
-	uint8_t editStep;
+	uint8_t editStep; // current editing step
 	bool active[NUM_STEPS];
 	float stepFrequency[NUM_STEPS];
-	float phase;
+	float phase; // use phase to calculate the duration of each step for one block of the sample
 	float tempo;
 	Mode mode;
 	bool gateState;
+	int8_t interval[NUM_STEPS]; // store the pitch interval for each step with the base as 440Hz
 } sequencer;
 
 Color stepColors[NUM_STEPS];
 Oscillator osc;
+
+void DebugPrint(const char *format, ...)
+{
+	if (!DEBUG_ENABLED)
+		return;
+
+	char buffer[256];
+	va_list args;
+	va_start(args, format);
+	vsprintf(buffer, format, args);
+	va_end(args);
+
+	hw.seed.PrintLine(buffer);
+}
+
+float getIntervalFrequency(int interval)
+{
+	if (interval == 0)
+	{
+		return BASE_FREQUENCY;
+	}
+	bool isGoingUp = interval > 0;
+	uint8_t position = abs(interval);
+	float ratio = sevenNoteScale[position - 1];
+	if (!isGoingUp)
+	{
+		ratio = (1.0f / ratio) / 2.0f; // invert the ratio when going below the octave
+	}
+
+	return BASE_FREQUENCY * ratio;
+}
 
 void updateLeds()
 {
@@ -69,8 +120,8 @@ void updateLeds()
 
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)
 {
+
 	hw.ProcessAllControls();
-	sequencer.tempo = MIN_TEMPO + hw.knob1.Process() * MAX_TEMPO;
 
 	if (hw.encoder.RisingEdge())
 	{
@@ -80,6 +131,8 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 
 	if (sequencer.mode == STEP_EDIT)
 	{
+		float valueForTempo = hw.knob1.Process();
+		sequencer.tempo = MIN_TEMPO + valueForTempo * (MAX_TEMPO - MIN_TEMPO);
 		int32_t inc = hw.encoder.Increment();
 		if (inc != 0)
 		{
@@ -87,27 +140,13 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 			updateLeds();
 		}
 
-		// get knob value (0 to 1)
-		float knobValue = hw.knob2.Process();
+		// use the knob2 to set the interval for each step in the sequence
+		float valueForInterval = hw.knob2.Process();
 
-		// map 0-0.5 to -2 to 0 octaves
-		// map 0.5-1 to 0 to +2 octaves
-		float octaveOffset;
-		if (knobValue < 0.5f)
-		{
-			// left half: map 0-0.5 to -2-0 octaves
-			octaveOffset = -4.0f * (0.5f - knobValue); // gives -2 at CCW, 0 at center
-		}
-		else
-		{
-			// right half: map 0.5-1 to 0-2 octaves
-			octaveOffset = 4.0f * (knobValue - 0.5f); // gives 0 at center, +2 at CW
-		}
-
-		// calculate new frequency based on octave offset
-		// we need to convert the linear frequency to logarithmic pitch
-		float newFrequency = BASE_FREQUENCY * powf(2.0f, octaveOffset);
-		sequencer.stepFrequency[sequencer.editStep] = newFrequency;
+		int calculatedInterval = (int)roundf((valueForInterval - 0.5f) * (2 * NUM_INTERVALS));
+		sequencer.interval[sequencer.editStep] = calculatedInterval;
+		// with the given interval get the frequency value
+		sequencer.stepFrequency[sequencer.editStep] = getIntervalFrequency(sequencer.interval[sequencer.editStep]);
 	}
 
 	if (hw.button2.RisingEdge() && sequencer.mode == STEP_EDIT)
@@ -118,25 +157,24 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 
 	/**
 	 * when we say tempo is 120BPM each beat represent a quarter note
-	 * in most electronic music and hence sequencers steps need to align with eighth notes
+	 * this is an 8 step sequencer so the each step has to eighth of a note
 	 * let's say the tempo is 120
-	 * tempo/60 = 2 beats per second
+	 * tempo/60 = 2 beats per second and each beat is a quarter not
 	 * then 2/2 makes each beat take eight of a note
-	 * without the last division /2 each step would last a full beat i.e. a quarter note
+	 * without the last division /2 each step would last a quarter note
 	 */
-	float phaseInc = (sequencer.tempo / 60.0f / 2.0f) / hw.AudioSampleRate();
+	float phaseInc = ((sequencer.tempo / 60.0f) / 2.0f) / hw.AudioSampleRate();
 
 	for (size_t i = 0; i < size; i++)
 	{
 		sequencer.phase += phaseInc;
-
 		if (sequencer.phase >= 1.0f)
 		{
 			sequencer.phase -= 1.0f;
 			sequencer.currentStep = (sequencer.currentStep + 1) % NUM_STEPS;
 			sequencer.gateState = sequencer.active[sequencer.currentStep];
 		}
-		// Update oscillator frequency when step changes
+		// update oscillator frequency when step changes
 		osc.SetFreq(sequencer.stepFrequency[sequencer.currentStep]);
 
 		// create a gate pulse that stays high for 50% of the step duration
@@ -147,10 +185,9 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 		// generate audio signal
 		float audioOut = osc.Process();
 		// only output audio when step is active
-		audioOut *= sequencer.active[sequencer.currentStep] ? 0.8f : 0.0f;
+		audioOut *= sequencer.active[sequencer.currentStep] ? 0.9f : 0.0f;
 
-		// left channel: clock signal (AUDIO_OUT_L)
-		// Output gate signal on both channels
+		// left channel: gate signal (AUDIO_OUT_L)
 		out[0][i] = trigger ? 5.0f : 0.f;
 
 		// right channel: audio signal (AUDIO_OUT_R)
@@ -170,6 +207,9 @@ int main(void)
 	hw.SetAudioBlockSize(48);
 	hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
 	hw.StartAdc();
+	hw.knob1.SetSampleRate(48000);
+
+	hw.seed.StartLog(false);
 
 	stepColors[0].Init(Color::RED);
 	stepColors[1].Init(Color::GREEN);
@@ -183,19 +223,20 @@ int main(void)
 	sequencer.mode = STEP_EDIT;
 	sequencer.tempo = 120;
 	sequencer.currentStep = 0;
+	sequencer.editStep = 0;
 	osc.Init(hw.AudioSampleRate());
 	osc.SetWaveform(Oscillator::WAVE_SIN);
-	osc.SetAmp(0.5f);
+	osc.SetAmp(0.95f);
 
 	for (int i = 0; i < NUM_STEPS; i++)
 	{
 		sequencer.stepFrequency[i] = BASE_FREQUENCY;
+		sequencer.active[i] = false;
 	}
 
 	hw.led1.SetRed(1);
 	hw.UpdateLeds();
 	hw.StartAudio(AudioCallback);
-
 	while (1)
 	{
 	}

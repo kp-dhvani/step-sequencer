@@ -1,6 +1,6 @@
 # Project Name
 TARGET = pod_patch
-
+LDFLAGS += -u _printf_float
 # Sources
 CPP_SOURCES = pod_patch.cpp
 
